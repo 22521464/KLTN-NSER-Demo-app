@@ -5,9 +5,9 @@
 
 ## Giới thiệu
 
-Dự án xây dựng hệ thống nhận diện cảm xúc trong giọng nói (Speech Emotion Recognition) phục vụ giám sát cuộc gọi tại các trung tâm chăm sóc khách hàng và đường dây an ninh. Hệ thống tự động phân tích file ghi âm cuộc gọi, phát hiện các cảm xúc tiêu cực và phát cảnh báo để hỗ trợ nhân viên can thiệp kịp thời.
+Dự án xây dựng hệ thống nhận diện cảm xúc trong giọng nói tiêu cực (Negative Speech Emotion Recognition) để thử nghiệm phục vụ giám sát cuộc gọi tại các trung tâm chăm sóc khách hàng và đường dây an ninh. Hệ thống tự động phân tích file ghi âm cuộc gọi, phát hiện các cảm xúc tiêu cực và phát cảnh báo để hỗ trợ nhân viên can thiệp kịp thời.
 
-**Luận văn tốt nghiệp — Khoa Công nghệ Thông tin**
+**Khoá luận tốt nghiệp — Khoa Hệ thống Thông tin**
 
 ---
 
