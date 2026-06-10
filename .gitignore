@@ -1,0 +1,7 @@
+models hubert/
+models wav2vec2/
+alert_log.csv
+
+__pycache__/
+*.pyc
+.DS_Store
