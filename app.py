@@ -146,7 +146,6 @@ def _load_weights_from_keras3_h5(model, h5path):
             if not layer.weights or layer.name not in mw:
                 continue
             top = mw[layer.name]
-            # Functional: top/{name}/... | Sequential: top/sequential/{name}/...
             if layer.name in top:
                 base = top[layer.name]
             elif "sequential" in top and layer.name in top["sequential"]:
@@ -203,19 +202,16 @@ def _build_conformer(num_classes=5):
         c2_n  = f"conv1d_{i*2+1}"
         sc_n  = "separable_conv1d"     if i == 0 else f"separable_conv1d_{i}"
         bn_n  = "batch_normalization"  if i == 0 else f"batch_normalization_{i}"
-        # FF Module 1
         ff1 = layers.LayerNormalization(name=ln(0))(x)
         ff1 = layers.Dense(256, activation="relu", name=dn(0))(ff1)
         ff1 = layers.Dropout(0.1)(ff1)
         ff1 = layers.Dense(128, name=dn(1))(ff1)
         ff1 = layers.Dropout(0.1)(ff1)
         x = layers.Add()([x, ff1 * 0.5])
-        # MHSA Module
         mhsa = layers.LayerNormalization(name=ln(1))(x)
         mhsa = layers.MultiHeadAttention(num_heads=4, key_dim=32, name=mha_n)(mhsa, mhsa)
         mhsa = layers.Dropout(0.1)(mhsa)
         x = layers.Add()([x, mhsa])
-        # Convolution Module
         conv = layers.LayerNormalization(name=ln(2))(x)
         conv = layers.Conv1D(256, 1, name=c1_n)(conv)
         conv_a, conv_b = tf.split(conv, 2, axis=-1)
@@ -225,14 +221,12 @@ def _build_conformer(num_classes=5):
         conv = layers.Conv1D(128, 1, name=c2_n)(conv)
         conv = layers.Dropout(0.1)(conv)
         x = layers.Add()([x, conv])
-        # FF Module 2
         ff2 = layers.LayerNormalization(name=ln(3))(x)
         ff2 = layers.Dense(256, activation="relu", name=dn(2))(ff2)
         ff2 = layers.Dropout(0.1)(ff2)
         ff2 = layers.Dense(128, name=dn(3))(ff2)
         ff2 = layers.Dropout(0.1)(ff2)
         x = layers.Add()([x, ff2 * 0.5])
-        # Final LN per block
         x = layers.LayerNormalization(name=ln(4))(x)
     x = layers.GlobalAveragePooling1D(name="global_average_pooling1d")(x)
     x = layers.Dense(128, activation="relu", name="dense_13")(x)
@@ -302,7 +296,6 @@ def load_all_artifacts():
     loaded = {}
     errors = []
 
-    # Load encoder from DNN (shared by all models)
     keras_cfg = next(c for c in MODEL_OPTIONS.values() if c["model_type"] == "keras")
     encoder = joblib.load(BASE_DIR / keras_cfg["model_dir"] / keras_cfg["encoder_file"])
     encoder_cache = {}
@@ -370,7 +363,6 @@ def predict_emotion(audio_bytes: bytes, model_name: str, artifacts: dict, encode
         import torch
         fe = art["feature_extractor"]
         hf_model = art["model"]
-        # Clip/pad to max 5s
         max_len = SR * 5
         audio = audio[:max_len]
         inputs = fe(audio, sampling_rate=SR, return_tensors="pt", padding=True)
@@ -399,11 +391,64 @@ def predict_emotion(audio_bytes: bytes, model_name: str, artifacts: dict, encode
         confidence = float(probs_arr[idx]) * 100
         probs = {enc.classes_[i]: float(probs_arr[i]) * 100 for i in range(len(probs_arr))}
 
-    all_probs = probs
-    return label, confidence, all_probs
+    return label, confidence, probs
 
 
-# ── Log helper ─────────────────────────────────────────────────────────────────
+def predict_ensemble(audio_bytes: bytes, artifacts: dict, encoder, loaded_models: list):
+    all_class_probs: dict = {}
+    model_count = 0
+    for model_name in loaded_models:
+        if artifacts.get(model_name) is None:
+            continue
+        try:
+            _, _, probs = predict_emotion(audio_bytes, model_name, artifacts, encoder)
+            for cls, p in probs.items():
+                all_class_probs.setdefault(cls, []).append(p)
+            model_count += 1
+        except Exception:
+            continue
+    if not all_class_probs:
+        raise ValueError("Không có mô hình nào hoạt động")
+    avg_probs = {cls: float(np.mean(vals)) for cls, vals in all_class_probs.items()}
+    best_label = max(avg_probs, key=avg_probs.get)
+    confidence = avg_probs[best_label]
+    return best_label, confidence, avg_probs, model_count
+
+
+# ── Render result helper ───────────────────────────────────────────────────────
+def render_result(label: str, confidence: float, all_probs: dict, model_label: str, threshold: int) -> bool:
+    is_alert = label in NEGATIVE_EMOTIONS and confidence >= threshold
+    if is_alert:
+        st.markdown(f"""
+        <div class="alert-box">
+            <h2 style="color:#FF4B4B; margin:0">CANH BAO</h2>
+            <h1 style="color:#FF4B4B; font-size:3rem; margin:0.2rem 0">{label.upper()}</h1>
+            <h3 style="color:#FF4B4B; margin:0">Confidence: {confidence:.1f}%</h3>
+            <small style="color:#FF4B4B; opacity:0.8">Model: {model_label}</small>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        note = ""
+        if label in NEGATIVE_EMOTIONS:
+            note = f"<br><small style='color:#888'>(Confidence {confidence:.1f}% &lt; ngưỡng {threshold}%)</small>"
+        st.markdown(f"""
+        <div class="safe-box">
+            <h2 style="color:#28A745; margin:0">BINH THUONG</h2>
+            <h1 style="font-size:3rem; margin:0.2rem 0">{label.upper()}</h1>
+            <h3 style="color:#28A745; margin:0">Confidence: {confidence:.1f}%{note}</h3>
+            <small style="color:#28A745; opacity:0.8">Model: {model_label}</small>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("**Phân phối xác suất:**")
+    for emo, prob in sorted(all_probs.items(), key=lambda x: x[1], reverse=True):
+        highlight = " — Dự đoán" if emo == label else ""
+        st.markdown(f"**{emo.capitalize()}**{highlight}")
+        st.progress(prob / 100, text=f"{prob:.1f}%")
+    return is_alert
+
+
+# ── Log helpers ────────────────────────────────────────────────────────────────
 def append_log(filename: str, model_name: str, emotion: str, confidence: float, is_alert: bool):
     row = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -458,22 +503,34 @@ with st.sidebar:
 
     st.divider()
 
-    # Model selector
-    st.markdown("### Chọn mô hình")
-    selected_model = st.radio(
-        "Mô hình nhận diện",
-        options=loaded_models,
-        label_visibility="collapsed",
+    # Ensemble toggle
+    st.markdown("### Chế độ phân tích")
+    use_ensemble = st.checkbox(
+        "Ensemble — dùng tất cả mô hình",
+        value=False,
+        help="Trung bình xác suất từ tất cả mô hình đã tải để tăng độ chính xác",
     )
 
-    cfg = MODEL_OPTIONS[selected_model]
-    st.markdown(f"""
-    <div class="model-card">
-        <b>{selected_model}</b><br>
-        <small style="color:#aaa">{cfg['description']}</small><br>
-        <small>Accuracy: <b>{cfg['accuracy']}</b></small>
-    </div>
-    """, unsafe_allow_html=True)
+    if use_ensemble:
+        selected_model = None
+        model_label = f"Ensemble ({len(loaded_models)} models)"
+        st.info(f"Sẽ chạy: {', '.join(loaded_models)}")
+    else:
+        st.markdown("#### Chọn mô hình đơn")
+        selected_model = st.radio(
+            "Mô hình nhận diện",
+            options=loaded_models,
+            label_visibility="collapsed",
+        )
+        cfg = MODEL_OPTIONS[selected_model]
+        st.markdown(f"""
+        <div class="model-card">
+            <b>{selected_model}</b><br>
+            <small style="color:#aaa">{cfg['description']}</small><br>
+            <small>Accuracy: <b>{cfg['accuracy']}</b></small>
+        </div>
+        """, unsafe_allow_html=True)
+        model_label = selected_model
 
     st.divider()
     st.markdown("### Cảm xúc cần cảnh báo")
@@ -489,78 +546,204 @@ with st.sidebar:
 # Tabs ────────────────────────────────────────────────────────────────────────
 tab1, tab2 = st.tabs(["Phân tích cuộc gọi", "Lịch sử cảnh báo"])
 
-# ── Tab 1: Upload & Predict ────────────────────────────────────────────────────
+# ── Tab 1: Analysis ────────────────────────────────────────────────────────────
 with tab1:
-    col_upload, col_result = st.columns([1, 1], gap="large")
+    sub1, sub2, sub3 = st.tabs(["Tải file đơn", "Ghi âm trực tiếp", "Xử lý hàng loạt"])
 
-    with col_upload:
-        st.markdown("#### Upload file ghi âm")
-        st.caption(f"Mô hình đang dùng: **{selected_model}** ({cfg['accuracy']})")
-        uploaded = st.file_uploader(
-            "Chọn file WAV hoặc MP3",
+    # ── Sub-tab 1: Single upload ───────────────────────────────────────────────
+    with sub1:
+        col_upload, col_result = st.columns([1, 1], gap="large")
+
+        with col_upload:
+            st.markdown("#### Upload file ghi âm")
+            st.caption(f"Chế độ: **{model_label}**")
+            uploaded = st.file_uploader(
+                "Chọn file WAV hoặc MP3",
+                type=["wav", "mp3"],
+                help="Hỗ trợ WAV / MP3, mono hoặc stereo. Hệ thống tự chuyển sang 16kHz.",
+                key="single_upload",
+            )
+
+            if uploaded:
+                st.audio(uploaded, format=f"audio/{uploaded.name.split('.')[-1]}")
+                st.caption(f"`{uploaded.name}` — {uploaded.size / 1024:.1f} KB")
+                analyze_btn = st.button("Phân tích cảm xúc", type="primary", use_container_width=True, key="btn_single")
+
+        with col_result:
+            st.markdown("#### Kết quả phân tích")
+
+            if uploaded and analyze_btn:
+                with st.spinner(f"Đang phân tích bằng {model_label}..."):
+                    try:
+                        audio_bytes = uploaded.read()
+                        if use_ensemble:
+                            label, confidence, all_probs, n_models = predict_ensemble(
+                                audio_bytes, artifacts, encoder, loaded_models
+                            )
+                            display_model = f"Ensemble ({n_models} models)"
+                        else:
+                            label, confidence, all_probs = predict_emotion(
+                                audio_bytes, selected_model, artifacts, encoder
+                            )
+                            display_model = selected_model
+
+                        is_alert = render_result(label, confidence, all_probs, display_model, confidence_threshold)
+                        append_log(uploaded.name, display_model, label, confidence, is_alert)
+
+                        if is_alert:
+                            st.toast(f"CẢNH BÁO — {display_model}: {label.upper()} ({confidence:.1f}%)")
+                        else:
+                            st.toast(f"{display_model}: {label.upper()}")
+
+                    except Exception as e:
+                        st.error(f"Lỗi khi phân tích: {e}")
+            else:
+                st.info("Upload file WAV/MP3 và nhấn **Phân tích cảm xúc** để bắt đầu.")
+
+    # ── Sub-tab 2: Microphone ──────────────────────────────────────────────────
+    with sub2:
+        col_mic, col_mic_result = st.columns([1, 1], gap="large")
+
+        with col_mic:
+            st.markdown("#### Ghi âm trực tiếp")
+            st.caption(f"Chế độ: **{model_label}**")
+            st.info("Nhấn nút mic bên dưới để bắt đầu ghi âm, nhấn lại để dừng.")
+            audio_input = st.audio_input("Ghi âm giọng nói", key="mic_input")
+
+            if audio_input:
+                st.caption(f"Thời lượng ghi âm: {audio_input.size / 1024:.1f} KB")
+                analyze_mic_btn = st.button(
+                    "Phân tích cảm xúc", type="primary", use_container_width=True, key="btn_mic"
+                )
+
+        with col_mic_result:
+            st.markdown("#### Kết quả phân tích")
+
+            if audio_input and analyze_mic_btn:
+                with st.spinner(f"Đang phân tích bằng {model_label}..."):
+                    try:
+                        audio_bytes = audio_input.read()
+                        if use_ensemble:
+                            label, confidence, all_probs, n_models = predict_ensemble(
+                                audio_bytes, artifacts, encoder, loaded_models
+                            )
+                            display_model = f"Ensemble ({n_models} models)"
+                        else:
+                            label, confidence, all_probs = predict_emotion(
+                                audio_bytes, selected_model, artifacts, encoder
+                            )
+                            display_model = selected_model
+
+                        is_alert = render_result(label, confidence, all_probs, display_model, confidence_threshold)
+                        append_log("mic_recording", display_model, label, confidence, is_alert)
+
+                        if is_alert:
+                            st.toast(f"CANH BAO — {display_model}: {label.upper()} ({confidence:.1f}%)")
+                        else:
+                            st.toast(f"{display_model}: {label.upper()}")
+
+                    except Exception as e:
+                        st.error(f"Lỗi khi phân tích: {e}")
+            else:
+                st.info("Ghi âm xong và nhấn **Phân tích cảm xúc** để bắt đầu.")
+
+    # ── Sub-tab 3: Batch ───────────────────────────────────────────────────────
+    with sub3:
+        st.markdown("#### Xử lý hàng loạt")
+        st.caption(f"Chế độ: **{model_label}** — Upload nhiều file, phân tích tất cả cùng lúc")
+
+        uploaded_batch = st.file_uploader(
+            "Chọn nhiều file WAV / MP3",
             type=["wav", "mp3"],
-            help="Hỗ trợ WAV / MP3, mono hoặc stereo. Hệ thống tự chuyển sang 16kHz.",
+            accept_multiple_files=True,
+            help="Có thể chọn nhiều file cùng lúc (Ctrl+Click hoặc Shift+Click)",
+            key="batch_upload",
         )
 
-        if uploaded:
-            st.audio(uploaded, format=f"audio/{uploaded.name.split('.')[-1]}")
-            st.caption(f"`{uploaded.name}` — {uploaded.size / 1024:.1f} KB")
-            analyze_btn = st.button("Phân tích cảm xúc", type="primary", use_container_width=True)
+        if uploaded_batch:
+            st.caption(f"Đã chọn: **{len(uploaded_batch)} file**")
+            analyze_batch_btn = st.button(
+                f"Phân tích tất cả {len(uploaded_batch)} file",
+                type="primary",
+                use_container_width=True,
+                key="btn_batch",
+            )
 
-    with col_result:
-        st.markdown("#### Kết quả phân tích")
+            if analyze_batch_btn:
+                results = []
+                progress_bar = st.progress(0, text="Đang phân tích...")
+                status_text = st.empty()
 
-        if uploaded and analyze_btn:
-            with st.spinner(f"Đang phân tích bằng {selected_model}..."):
-                try:
-                    audio_bytes = uploaded.read()
-                    label, confidence, all_probs = predict_emotion(
-                        audio_bytes, selected_model, artifacts, encoder
-                    )
-                    is_alert = label in NEGATIVE_EMOTIONS and confidence >= confidence_threshold
-                    ecfg = EMOTION_CONFIG[label]
+                for i, f in enumerate(uploaded_batch):
+                    status_text.caption(f"Đang xử lý: `{f.name}` ({i+1}/{len(uploaded_batch)})")
+                    try:
+                        audio_bytes = f.read()
+                        if use_ensemble:
+                            label, confidence, all_probs, n_models = predict_ensemble(
+                                audio_bytes, artifacts, encoder, loaded_models
+                            )
+                            display_model = f"Ensemble ({n_models} models)"
+                        else:
+                            label, confidence, all_probs = predict_emotion(
+                                audio_bytes, selected_model, artifacts, encoder
+                            )
+                            display_model = selected_model
 
-                    if is_alert:
-                        st.markdown(f"""
-                        <div class="alert-box">
-                            <h2 style="color:#FF4B4B; margin:0">CANH BAO</h2>
-                            <h1 style="color:#FF4B4B; font-size:3rem; margin:0.2rem 0">
-                                {label.upper()}
-                            </h1>
-                            <h3 style="color:#FF4B4B; margin:0">Confidence: {confidence:.1f}%</h3>
-                            <small style="color:#FF4B4B; opacity:0.8">Model: {selected_model}</small>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        note = "" if label not in NEGATIVE_EMOTIONS else f"<br><small style='color:#888'>(Confidence {confidence:.1f}% &lt; ngưỡng {confidence_threshold}%)</small>"
-                        st.markdown(f"""
-                        <div class="safe-box">
-                            <h2 style="color:#28A745; margin:0">BINH THUONG</h2>
-                            <h1 style="font-size:3rem; margin:0.2rem 0">
-                                {label.upper()}
-                            </h1>
-                            <h3 style="color:#28A745; margin:0">Confidence: {confidence:.1f}%{note}</h3>
-                            <small style="color:#28A745; opacity:0.8">Model: {selected_model}</small>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        is_alert = label in NEGATIVE_EMOTIONS and confidence >= confidence_threshold
+                        append_log(f.name, display_model, label, confidence, is_alert)
+                        results.append({
+                            "File": f.name,
+                            "Cảm xúc": label.capitalize(),
+                            "Confidence (%)": round(confidence, 1),
+                            "Cảnh báo": "YES" if is_alert else "NO",
+                            "Model": display_model,
+                        })
+                    except Exception as e:
+                        results.append({
+                            "File": f.name,
+                            "Cảm xúc": "Lỗi",
+                            "Confidence (%)": 0.0,
+                            "Cảnh báo": "NO",
+                            "Model": display_model,
+                        })
 
-                    st.markdown("**Phân phối xác suất:**")
-                    sorted_probs = sorted(all_probs.items(), key=lambda x: x[1], reverse=True)
-                    for emo, prob in sorted_probs:
-                        highlight = " — Dự đoán" if emo == label else ""
-                        st.markdown(f"**{emo.capitalize()}**{highlight}")
-                        st.progress(prob / 100, text=f"{prob:.1f}%")
+                    progress_bar.progress((i + 1) / len(uploaded_batch), text=f"{i+1}/{len(uploaded_batch)} file")
 
-                    append_log(uploaded.name, selected_model, label, confidence, is_alert)
-                    if is_alert:
-                        st.toast(f"CANH BAO — {selected_model}: {label.upper()} ({confidence:.1f}%)")
-                    else:
-                        st.toast(f"{selected_model}: {label.upper()}")
+                status_text.empty()
+                progress_bar.empty()
 
-                except Exception as e:
-                    st.error(f"Lỗi khi phân tích: {e}")
+                df_batch = pd.DataFrame(results)
+                n_alert = (df_batch["Cảnh báo"] == "YES").sum()
+                n_ok = len(df_batch) - n_alert
+
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Tổng file", len(df_batch))
+                m2.metric("Cảnh báo", n_alert, delta=None)
+                m3.metric("Bình thường", n_ok)
+
+                st.dataframe(
+                    df_batch,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Cảnh báo": st.column_config.TextColumn(
+                            "Cảnh báo",
+                            help="YES = cảm xúc tiêu cực vượt ngưỡng",
+                        ),
+                        "Confidence (%)": st.column_config.NumberColumn(format="%.1f%%"),
+                    },
+                )
+
+                csv_bytes = df_batch.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "Tải xuống kết quả (CSV)",
+                    data=csv_bytes,
+                    file_name=f"batch_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                )
+
         else:
-            st.info("Upload file WAV/MP3 và nhấn **Phân tích cảm xúc** để bắt đầu.")
+            st.info("Upload nhiều file WAV/MP3 và nhấn **Phân tích tất cả** để bắt đầu.")
 
 # ── Tab 2: History ─────────────────────────────────────────────────────────────
 with tab2:
@@ -587,7 +770,7 @@ with tab2:
         with filter_col3:
             model_col = "model" if "model" in df_log.columns else None
             if model_col:
-                filter_model = st.selectbox("Lọc model", ["Tất cả"] + list(MODEL_OPTIONS.keys()))
+                filter_model = st.selectbox("Lọc model", ["Tất cả"] + list(MODEL_OPTIONS.keys()) + ["Ensemble"])
             else:
                 filter_model = "Tất cả"
 
@@ -599,7 +782,10 @@ with tab2:
         if filter_emotion != "Tất cả":
             df_display = df_display[df_display["emotion"] == filter_emotion]
         if filter_model != "Tất cả" and model_col:
-            df_display = df_display[df_display["model"] == filter_model]
+            if filter_model == "Ensemble":
+                df_display = df_display[df_display["model"].str.startswith("Ensemble")]
+            else:
+                df_display = df_display[df_display["model"] == filter_model]
 
         st.dataframe(
             df_display.sort_values("timestamp", ascending=False).reset_index(drop=True),

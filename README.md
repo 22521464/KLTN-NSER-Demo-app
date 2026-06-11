@@ -41,7 +41,10 @@ Dự án xây dựng hệ thống nhận diện cảm xúc trong giọng nói ti
 
 ## Chức năng Demo App
 
-- **Phân tích cuộc gọi** — Upload file WAV/MP3, chọn mô hình, nhận kết quả cảm xúc kèm confidence
+- **Tải file đơn** — Upload file WAV/MP3, chọn mô hình, nhận kết quả cảm xúc kèm confidence
+- **Ghi âm trực tiếp** — Ghi âm ngay trên trình duyệt và phân tích tức thì, không cần upload file
+- **Xử lý hàng loạt** — Upload nhiều file cùng lúc, phân tích toàn bộ, xuất kết quả CSV
+- **Ensemble** — Kết hợp tất cả mô hình đã tải, trung bình xác suất để tăng độ chính xác
 - **Cảnh báo tự động** — Highlight màu đỏ khi phát hiện cảm xúc tiêu cực vượt ngưỡng confidence
 - **Phân phối xác suất** — Hiển thị xác suất dự đoán cho tất cả 5 cảm xúc
 - **Ngưỡng cảnh báo tùy chỉnh** — Điều chỉnh mức confidence tối thiểu để kích hoạt cảnh báo (30–90%)
@@ -129,11 +132,13 @@ Trình duyệt sẽ tự mở tại `http://localhost:8501`.
 
 ## Sử dụng
 
-1. Mở app, chọn mô hình ở thanh bên trái
-2. Vào tab **Phân tích cuộc gọi** → Upload file WAV hoặc MP3
-3. Nhấn **Phân tích cảm xúc**
-4. Xem kết quả: cảm xúc dự đoán, confidence, phân phối xác suất
-5. Kết quả được tự động lưu vào tab **Lịch sử cảnh báo**
+1. Mở app, chọn mô hình ở thanh bên trái (hoặc bật **Ensemble** để dùng tất cả mô hình)
+2. Chọn chế độ phân tích:
+   - **Tải file đơn** — Upload file WAV/MP3 → nhấn **Phân tích cảm xúc**
+   - **Ghi âm trực tiếp** — Nhấn nút mic để ghi → nhấn **Phân tích cảm xúc**
+   - **Xử lý hàng loạt** — Upload nhiều file → nhấn **Phân tích tất cả**
+3. Xem kết quả: cảm xúc dự đoán, confidence, phân phối xác suất
+4. Kết quả được tự động lưu vào tab **Lịch sử cảnh báo**
 
 ---
 
