@@ -27,7 +27,7 @@ MODEL_OPTIONS = {
         "model_file": "best_dnn_model_m01.h5",
         "scaler_file": "scaler.pkl",
         "encoder_file": "label_encoder.pkl",
-        "accuracy": "92.71%",
+        "accuracy": "92.01%",
         "description": "Dense Neural Network — nhẹ, inference nhanh (~ms)",
         "input_format": "flat",
         "model_type": "keras",
@@ -37,7 +37,7 @@ MODEL_OPTIONS = {
         "model_file": "best_cnn_lstm_m01.h5",
         "scaler_file": "scaler_cnn_lstm.pkl",
         "encoder_file": "label_encoder.pkl",
-        "accuracy": "91.44%",
+        "accuracy": "90.74%",
         "description": "CNN + Bidirectional LSTM — nắm bắt đặc trưng cục bộ và tuần tự",
         "input_format": "3d_last",
         "model_type": "keras",
@@ -47,7 +47,7 @@ MODEL_OPTIONS = {
         "model_file": "best_conformer_model_m01.h5",
         "scaler_file": "scaler_conformer_m01.pkl",
         "encoder_file": "label_encoder_conformer_m01.pkl",
-        "accuracy": "87.27%",
+        "accuracy": "83.80%",
         "description": "Conformer — Self-Attention + Depthwise Conv, kiến trúc hybrid mạnh cho audio",
         "input_format": "3d_last",
         "model_type": "keras",
@@ -73,7 +73,7 @@ MODEL_OPTIONS = {
     "Wav2Vec2": {
         "model_dir": "models wav2vec2/final_model",
         "hf_repo": "TienGiang/ser-wav2vec2-ravdess",
-        "accuracy": "93.64%",
+        "accuracy": "93.06%",
         "description": "Wav2Vec 2.0 fine-tuned — Transformer end-to-end, accuracy cao nhất",
         "model_type": "huggingface",
     },
@@ -294,7 +294,8 @@ def load_all_artifacts():
     import tensorflow as tf
 
     loaded = {}
-    errors = []
+    missing_files = []   # local file not found
+    load_errors = []     # runtime errors (HF timeout, corrupt model, ...)
 
     keras_cfg = next(c for c in MODEL_OPTIONS.values() if c["model_type"] == "keras")
     encoder = joblib.load(BASE_DIR / keras_cfg["model_dir"] / keras_cfg["encoder_file"])
@@ -306,7 +307,7 @@ def load_all_artifacts():
         if cfg["model_type"] == "huggingface":
             source = str(models_dir) if models_dir.exists() else cfg.get("hf_repo")
             if not source:
-                errors.append(str(models_dir))
+                missing_files.append(str(models_dir))
                 loaded[name] = None
                 continue
             try:
@@ -316,14 +317,14 @@ def load_all_artifacts():
                 hf_model.eval()
                 loaded[name] = {"model": hf_model, "feature_extractor": fe}
             except Exception as e:
-                errors.append(f"{name}: {e}")
+                load_errors.append(f"{name}: {e}")
                 loaded[name] = None
         else:
             model_path = models_dir / cfg["model_file"]
             scaler_path = models_dir / cfg["scaler_file"]
             missing = [str(p) for p in [model_path, scaler_path] if not p.exists()]
             if missing:
-                errors.extend(missing)
+                missing_files.extend(missing)
                 loaded[name] = None
                 continue
             enc_path = models_dir / cfg["encoder_file"]
@@ -342,7 +343,7 @@ def load_all_artifacts():
                 _load_weights_from_keras3_h5(model, str(model_path))
             loaded[name] = {"model": model, "scaler": joblib.load(scaler_path), "encoder": enc}
 
-    return loaded, encoder, errors
+    return loaded, encoder, missing_files, load_errors
 
 
 # ── Feature extraction ─────────────────────────────────────────────────────────
@@ -421,7 +422,7 @@ def render_result(label: str, confidence: float, all_probs: dict, model_label: s
     if is_alert:
         st.markdown(f"""
         <div class="alert-box">
-            <h2 style="color:#FF4B4B; margin:0">CANH BAO</h2>
+            <h2 style="color:#FF4B4B; margin:0">CẢNH BÁO</h2>
             <h1 style="color:#FF4B4B; font-size:3rem; margin:0.2rem 0">{label.upper()}</h1>
             <h3 style="color:#FF4B4B; margin:0">Confidence: {confidence:.1f}%</h3>
             <small style="color:#FF4B4B; opacity:0.8">Model: {model_label}</small>
@@ -488,11 +489,17 @@ st.markdown("""
 # Sidebar ─────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### Trạng thái hệ thống")
-    artifacts, encoder, errors = load_all_artifacts()
+    artifacts, encoder, missing_files, load_errors = load_all_artifacts()
 
-    if errors:
-        for e in errors:
-            st.error(f"Thiếu file: `{os.path.basename(e)}`")
+    for p in missing_files:
+        st.error(f"Thiếu file: `{os.path.basename(p)}`")
+    for e in load_errors:
+        # e.g. "HuBERT: [Errno 60] Operation timed out"
+        model_name = e.split(":")[0]
+        if "timed out" in e or "Errno 60" in e:
+            st.warning(f"{model_name}: Không thể kết nối HuggingFace Hub (timeout). Kiểm tra internet hoặc tải model về local.")
+        else:
+            st.warning(f"Không tải được {e}")
 
     loaded_models = [name for name, v in artifacts.items() if v is not None]
     if not loaded_models:
@@ -525,9 +532,9 @@ with st.sidebar:
         cfg = MODEL_OPTIONS[selected_model]
         st.markdown(f"""
         <div class="model-card">
-            <b>{selected_model}</b><br>
-            <small style="color:#aaa">{cfg['description']}</small><br>
-            <small>Accuracy: <b>{cfg['accuracy']}</b></small>
+            <b style="color:#ffffff">{selected_model}</b><br>
+            <small style="color:#cccccc">{cfg['description']}</small><br>
+            <small style="color:#aaddff">Accuracy: <b>{cfg['accuracy']}</b></small>
         </div>
         """, unsafe_allow_html=True)
         model_label = selected_model
@@ -548,7 +555,7 @@ tab1, tab2 = st.tabs(["Phân tích cuộc gọi", "Lịch sử cảnh báo"])
 
 # ── Tab 1: Analysis ────────────────────────────────────────────────────────────
 with tab1:
-    sub1, sub2, sub3 = st.tabs(["Tải file đơn", "Ghi âm trực tiếp", "Xử lý hàng loạt"])
+    sub1, sub3 = st.tabs(["Tải file đơn", "Xử lý hàng loạt"])
 
     # ── Sub-tab 1: Single upload ───────────────────────────────────────────────
     with sub1:
@@ -600,54 +607,7 @@ with tab1:
             else:
                 st.info("Upload file WAV/MP3 và nhấn **Phân tích cảm xúc** để bắt đầu.")
 
-    # ── Sub-tab 2: Microphone ──────────────────────────────────────────────────
-    with sub2:
-        col_mic, col_mic_result = st.columns([1, 1], gap="large")
-
-        with col_mic:
-            st.markdown("#### Ghi âm trực tiếp")
-            st.caption(f"Chế độ: **{model_label}**")
-            st.info("Nhấn nút mic bên dưới để bắt đầu ghi âm, nhấn lại để dừng.")
-            audio_input = st.audio_input("Ghi âm giọng nói", key="mic_input")
-
-            if audio_input:
-                st.caption(f"Thời lượng ghi âm: {audio_input.size / 1024:.1f} KB")
-                analyze_mic_btn = st.button(
-                    "Phân tích cảm xúc", type="primary", use_container_width=True, key="btn_mic"
-                )
-
-        with col_mic_result:
-            st.markdown("#### Kết quả phân tích")
-
-            if audio_input and analyze_mic_btn:
-                with st.spinner(f"Đang phân tích bằng {model_label}..."):
-                    try:
-                        audio_bytes = audio_input.read()
-                        if use_ensemble:
-                            label, confidence, all_probs, n_models = predict_ensemble(
-                                audio_bytes, artifacts, encoder, loaded_models
-                            )
-                            display_model = f"Ensemble ({n_models} models)"
-                        else:
-                            label, confidence, all_probs = predict_emotion(
-                                audio_bytes, selected_model, artifacts, encoder
-                            )
-                            display_model = selected_model
-
-                        is_alert = render_result(label, confidence, all_probs, display_model, confidence_threshold)
-                        append_log("mic_recording", display_model, label, confidence, is_alert)
-
-                        if is_alert:
-                            st.toast(f"CANH BAO — {display_model}: {label.upper()} ({confidence:.1f}%)")
-                        else:
-                            st.toast(f"{display_model}: {label.upper()}")
-
-                    except Exception as e:
-                        st.error(f"Lỗi khi phân tích: {e}")
-            else:
-                st.info("Ghi âm xong và nhấn **Phân tích cảm xúc** để bắt đầu.")
-
-    # ── Sub-tab 3: Batch ───────────────────────────────────────────────────────
+    # ── Sub-tab 2: Batch ───────────────────────────────────────────────────────
     with sub3:
         st.markdown("#### Xử lý hàng loạt")
         st.caption(f"Chế độ: **{model_label}** — Upload nhiều file, phân tích tất cả cùng lúc")

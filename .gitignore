@@ -1,5 +1,5 @@
-models hubert/
-models wav2vec2/
+models hubert/best_model
+models wav2vec2/final_model
 alert_log.csv
 
 __pycache__/
