@@ -1,5 +1,5 @@
 # Hệ thống Nhận diện Cảm xúc Tiêu cực trong Giọng nói
-**Speech Emotion Recognition (SER) — Ứng dụng cho Call Center / Hotline An ninh**
+**Negative Speech Emotion Recognition (NSER) — Ứng dụng cho Call Center / Hotline An ninh**
 
 ---
 
